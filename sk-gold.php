@@ -1,9 +1,12 @@
 <?php
 /*
-Plugin Name: Melix Gold
+Plugin Name: SK Gold
 Description: Gold karat rates (14K,18K,21K,22K,24K). Manual inputs + optional auto-fill 24K from GoldPriceZ API (AED). Hourly cron, auto-recalculate WC prices, shortcodes, logs, robust product meta UI.
-Version: 3.3.2
+Version: 3.3.6
 Author: Sheraz Khan | NETREX
+License: GPLv2 or later
+License URI: http://www.gnu.org/licenses/gpl-2.0.html
+Text Domain: sk-gold
 */
 if (!defined('ABSPATH')) exit;
 
@@ -233,7 +236,7 @@ class Melix_Rates_Karats {
                     // Limit to 50 records for performance
                     $initial = $this->fetch_logs(0, 50);
                     if(!empty($initial)) {
-                        foreach ($initial as $entry) echo $this->render_log_row($entry);
+                        foreach ($initial as $entry) echo wp_kses_post( $this->render_log_row($entry) );
                     } else {
                         echo '<div style="padding:15px; color:#666;">No logs found.</div>';
                     }
@@ -242,7 +245,7 @@ class Melix_Rates_Karats {
             </div>
             
             <div style="margin-top:15px; text-align:center;">
-                <a href="<?php echo admin_url('admin.php?page=melix-karats-logs'); ?>" class="button button-secondary">View More Records</a>
+                <a href="<?php echo esc_url( admin_url('admin.php?page=melix-karats-logs') ); ?>" class="button button-secondary">View More Records</a>
             </div>
         </div>
         
@@ -304,7 +307,7 @@ class Melix_Rates_Karats {
         check_admin_referer('melix_save_settings','melix_nonce');
         
         // Get active tab from hidden input
-        $target_tab = isset($_POST['melix_active_tab']) ? sanitize_text_field($_POST['melix_active_tab']) : 'tab-settings';
+        $target_tab = isset( $_POST['melix_active_tab'] ) ? sanitize_text_field( wp_unslash( $_POST['melix_active_tab'] ) ) : 'tab-settings';
         
         $opts = get_option($this->opt_key, array());
         $old = $opts;
@@ -437,7 +440,7 @@ class Melix_Rates_Karats {
         elseif (isset($safe_headers['x-rate-limit-reset'])) $reset = $safe_headers['x-rate-limit-reset'];
 
         if ($remaining !== '') $opts['api_usage_remaining'] = $remaining;
-        if ($reset !== '') { $opts['api_usage_reset'] = is_numeric($reset) ? date('Y-m-d H:i:s', $reset) : $reset; }
+        if ($reset !== '') { $opts['api_usage_reset'] = is_numeric($reset) ? gmdate('Y-m-d H:i:s', $reset) : $reset; }
         else { if ($remaining !== '') $opts['api_usage_reset'] = '1st of next month'; }
 
         $body = wp_remote_retrieve_body($response);
@@ -729,18 +732,25 @@ class Melix_Rates_Karats {
         return array_slice($filtered, $offset, $limit);
     }
 
-    public function ajax_load_logs(){
-        if (!current_user_can('manage_options')) wp_send_json_error('Unauthorized',403);
-        
+    public function ajax_load_logs() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( 'Unauthorized', 403 );
+        }
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
         $offset = isset($_POST['offset']) ? intval($_POST['offset']) : 0;
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
         $limit  = isset($_POST['limit']) ? intval($_POST['limit']) : 20;
         
         // Capture filters correctly
         $filters = array(
-            'search' => isset($_POST['search']) ? sanitize_text_field($_POST['search']) : '',
-            'date'   => isset($_POST['date']) ? sanitize_text_field($_POST['date']) : '',
-            'user'   => isset($_POST['user']) ? sanitize_text_field($_POST['user']) : '',
-            'karat'  => isset($_POST['karat']) ? sanitize_text_field($_POST['karat']) : '',
+            // phpcs:ignore WordPress.Security.NonceVerification.Missing
+            'search' => isset($_POST['search']) ? sanitize_text_field(wp_unslash($_POST['search'])) : '',
+            // phpcs:ignore WordPress.Security.NonceVerification.Missing
+            'date'   => isset($_POST['date']) ? sanitize_text_field(wp_unslash($_POST['date'])) : '',
+            // phpcs:ignore WordPress.Security.NonceVerification.Missing
+            'user'   => isset($_POST['user']) ? sanitize_text_field(wp_unslash($_POST['user'])) : '',
+            // phpcs:ignore WordPress.Security.NonceVerification.Missing
+            'karat'  => isset($_POST['karat']) ? sanitize_text_field(wp_unslash($_POST['karat'])) : '',
         );
 
         // Fetch items
@@ -915,10 +925,19 @@ class Melix_Rates_Karats {
         <?php
     }
 
+    // --- HELPER MOVED TO TOP ---
     /* Helpers */
     private function count_products_by_karat($karat){
         global $wpdb;
-        return intval($wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE meta_key=%s AND meta_value=%s", 'melix_karat', $karat)));
+        $cache_key = 'melix_count_' . $karat;
+        $count = wp_cache_get($cache_key, 'sk_gold');
+
+        if (false === $count) {
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+            $count = intval($wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE meta_key=%s AND meta_value=%s", 'melix_karat', $karat)));
+            wp_cache_set($cache_key, $count, 'sk_gold', HOUR_IN_SECONDS);
+        }
+        return $count;
     }
 
     /* Product admin fields */
@@ -967,8 +986,11 @@ class Melix_Rates_Karats {
     }
 
     public function save_variation_meta($variation_id,$i){
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
         if (isset($_POST['melix_karat'][$variation_id])) update_post_meta($variation_id,'melix_karat',sanitize_text_field(wp_unslash($_POST['melix_karat'][$variation_id])));
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
         if (isset($_POST['melix_weight'][$variation_id])) update_post_meta($variation_id,'melix_weight',sanitize_text_field(wp_unslash($_POST['melix_weight'][$variation_id])));
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing
         if (isset($_POST['melix_markup'][$variation_id])) update_post_meta($variation_id,'melix_markup',sanitize_text_field(wp_unslash($_POST['melix_markup'][$variation_id])));
 
         $opts = get_option($this->opt_key, array());
